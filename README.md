@@ -1,5 +1,7 @@
 # Kanryo
 
+[![CI](https://github.com/vsbakushkin/kanryo/actions/workflows/ci.yml/badge.svg)](https://github.com/vsbakushkin/kanryo/actions/workflows/ci.yml)
+
 Kanryo is a local-first project manager for developers' side projects. It helps you pick up where you left off and ship: track the next step, milestones, a project journal, and tasks alongside your code.
 
 The project is in early development. User-facing clients and synchronization are not implemented yet.
