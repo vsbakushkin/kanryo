@@ -84,6 +84,30 @@ pub struct Project {
 }
 
 impl Project {
+    pub fn new(
+        id: ProjectId,
+        name: String,
+        key: String,
+        status: &str,
+        position: String,
+        created_at: DateTime<Utc>,
+    ) -> Result<Self, CoreError> {
+        Ok(Self {
+            id,
+            name,
+            key,
+            description: String::new(),
+            color: "gray".to_string(),
+            status: ProjectStatus::try_from(status)?,
+            next_step: String::new(),
+            repo_url: None,
+            position,
+            is_inbox: false,
+            deleted: false,
+            created_at,
+        })
+    }
+
     pub fn set_status(&mut self, value: &str) -> Result<(), CoreError> {
         let project_status = ProjectStatus::try_from(value)?;
         self.status = project_status;
@@ -145,6 +169,32 @@ pub struct Task {
 }
 
 impl Task {
+    pub fn new(
+        id: TaskId,
+        project_id: ProjectId,
+        title: String,
+        priority: i16,
+        position: String,
+        created_at: DateTime<Utc>,
+    ) -> Result<Self, CoreError> {
+        validation::validate_task_title(&title)?;
+        Ok(Self {
+            id,
+            number: None,
+            project_id,
+            column_id: None,
+            milestone_id: None,
+            parent_id: None,
+            title,
+            notes: String::new(),
+            priority: Priority::try_from(priority)?,
+            completed_at: None,
+            position,
+            deleted: false,
+            created_at,
+        })
+    }
+
     pub fn set_title(&mut self, title: String) -> Result<(), CoreError> {
         validation::validate_task_title(&title)?;
         self.title = title;
@@ -190,41 +240,57 @@ mod tests {
     use super::*;
 
     fn test_task() -> Task {
-        Task {
-            id: TaskId::new_v7(1_700_000_000_000, [1; 10]),
-            number: Some(1),
-            project_id: ProjectId::new_v7(1_700_000_000_000, [2; 10]),
-            column_id: None,
-            milestone_id: None,
-            parent_id: None,
-            title: "Original title".to_string(),
-            notes: String::new(),
-            priority: Priority::P4,
-            completed_at: None,
-            position: "a".to_string(),
-            deleted: false,
-            created_at: DateTime::parse_from_rfc3339("2025-01-01T00:00:00Z")
+        Task::new(
+            TaskId::new_v7(1_700_000_000_000, [1; 10]),
+            ProjectId::new_v7(1_700_000_000_000, [2; 10]),
+            "Original title".to_string(),
+            4,
+            "a".to_string(),
+            DateTime::parse_from_rfc3339("2025-01-01T00:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc),
-        }
+        )
+        .unwrap()
     }
 
     fn test_project() -> Project {
-        Project {
-            id: ProjectId::new_v7(1_700_000_000_000, [2; 10]),
-            name: "Test project".to_string(),
-            key: "TEST".to_string(),
-            description: String::new(),
-            color: "#000000".to_string(),
-            status: ProjectStatus::Idea,
-            next_step: String::new(),
-            repo_url: None,
-            position: "a".to_string(),
-            is_inbox: false,
-            deleted: false,
-            created_at: DateTime::parse_from_rfc3339("2025-01-01T00:00:00Z")
+        Project::new(
+            ProjectId::new_v7(1_700_000_000_000, [2; 10]),
+            "Test project".to_string(),
+            "TEST".to_string(),
+            "idea",
+            "a".to_string(),
+            DateTime::parse_from_rfc3339("2025-01-01T00:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn task_new_rejects_invalid_values() {
+        for (title, priority, expected_error) in [
+            ("", 4, validation::validate_task_title("").unwrap_err()),
+            ("Valid title", 5, CoreError::InvalidPriority { value: 5 }),
+        ] {
+            let error = Task::new(
+                TaskId::new_v7(1_700_000_000_000, [1; 10]),
+                ProjectId::new_v7(1_700_000_000_000, [2; 10]),
+                title.to_string(),
+                priority,
+                "a".to_string(),
+                DateTime::parse_from_rfc3339("2025-01-01T00:00:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            )
+            .unwrap_err();
+            assert_eq!(
+                std::mem::discriminant(&error),
+                std::mem::discriminant(&expected_error),
+            );
+            if let CoreError::InvalidPriority { value } = error {
+                assert_eq!(value, priority);
+            }
         }
     }
 
@@ -262,6 +328,20 @@ mod tests {
 
     #[test]
     fn project_set_status_updates_value_and_preserves_entity_on_error() {
+        assert!(matches!(
+            Project::new(
+                ProjectId::new_v7(1_700_000_000_000, [2; 10]),
+                "Test project".to_string(),
+                "TEST".to_string(),
+                "unknown",
+                "a".to_string(),
+                DateTime::parse_from_rfc3339("2025-01-01T00:00:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            ),
+            Err(CoreError::InvalidProjectStatus { value }) if value == "unknown"
+        ));
+
         let mut project = test_project();
 
         project.set_status("active").unwrap();
