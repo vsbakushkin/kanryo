@@ -17,4 +17,10 @@ pub enum CoreError {
 
     #[error("invalid HLC format, expected 'ms-counter-device', got {value}")]
     InvalidHlcFormat { value: String },
+
+    #[error("HLC counter overflow")]
+    HlcCounterOverflow,
+
+    #[error("HLC timestamp exceeds 16 decimal digits: {ms}")]
+    HlcTimestampOutOfRange { ms: u64 },
 }

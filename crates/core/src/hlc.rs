@@ -4,6 +4,10 @@ use std::str::FromStr;
 
 use crate::error::CoreError;
 
+pub trait TimeSource {
+    fn now_ms(&self) -> u64;
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Hlc {
     ms: u64,
@@ -93,6 +97,54 @@ impl<'de> Deserialize<'de> for Hlc {
     }
 }
 
+pub struct Clock<T: TimeSource> {
+    time_source: T,
+    device: u32,
+    last: Option<Hlc>,
+}
+
+impl<T: TimeSource> Clock<T> {
+    pub fn new(time_source: T, device: u32) -> Self {
+        Self {
+            time_source,
+            device,
+            last: None,
+        }
+    }
+
+    pub fn tick(&mut self) -> Result<Hlc, CoreError> {
+        let now_ms = self.time_source.now_ms();
+
+        if now_ms >= 10_u64.pow(16) {
+            return Err(CoreError::HlcTimestampOutOfRange { ms: now_ms });
+        }
+
+        let next = match self.last {
+            None => Hlc {
+                ms: now_ms,
+                counter: 0,
+                device: self.device,
+            },
+            Some(last) if now_ms > last.ms => Hlc {
+                ms: now_ms,
+                counter: 0,
+                device: self.device,
+            },
+            Some(last) => Hlc {
+                ms: last.ms,
+                counter: last
+                    .counter
+                    .checked_add(1)
+                    .ok_or(CoreError::HlcCounterOverflow)?,
+                device: self.device,
+            },
+        };
+
+        self.last = Some(next);
+        Ok(next)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::Hlc;
@@ -163,5 +215,101 @@ mod tests {
 
         let restored: Hlc = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, hlc);
+    }
+
+    struct FakeTimeSource {
+        ms: std::cell::Cell<u64>,
+    }
+
+    impl FakeTimeSource {
+        fn new(ms: u64) -> Self {
+            Self {
+                ms: std::cell::Cell::new(ms),
+            }
+        }
+    }
+
+    impl super::TimeSource for FakeTimeSource {
+        fn now_ms(&self) -> u64 {
+            self.ms.get()
+        }
+    }
+
+    #[test]
+    fn tick_handles_equal_backward_and_forward_time_and_saves_last() {
+        let mut clock = super::Clock::new(FakeTimeSource::new(1000), 0xa1b2c3d4);
+
+        for (now, expected_ms, expected_counter) in [
+            (1000, 1000, 0),
+            (1000, 1000, 1),
+            (999, 1000, 2),
+            (1001, 1001, 0),
+        ] {
+            clock.time_source.ms.set(now);
+            let hlc = clock.tick().expect("tick should succeed");
+
+            assert_eq!((hlc.ms, hlc.counter), (expected_ms, expected_counter));
+            assert_eq!(hlc.device, 0xa1b2c3d4);
+            assert_eq!(clock.last, Some(hlc), "successful tick must save last");
+        }
+    }
+
+    #[test]
+    fn counter_overflow_preserves_last_and_forward_time_allows_recovery() {
+        let mut clock = super::Clock::new(FakeTimeSource::new(1000), 7);
+        let last = Hlc {
+            ms: 1000,
+            counter: u16::MAX,
+            device: 7,
+        };
+        clock.last = Some(last);
+
+        for now in [1000, 999] {
+            clock.time_source.ms.set(now);
+            assert!(matches!(
+                clock.tick(),
+                Err(crate::error::CoreError::HlcCounterOverflow)
+            ));
+            assert_eq!(clock.last, Some(last), "overflow must preserve last");
+        }
+
+        clock.time_source.ms.set(1001);
+        let recovered = clock.tick().expect("forward time resets the counter");
+        assert_eq!((recovered.ms, recovered.counter), (1001, 0));
+        assert_eq!(recovered.device, 7);
+        assert_eq!(clock.last, Some(recovered));
+    }
+
+    #[test]
+    fn tick_enforces_sixteen_digit_time_limit_and_preserves_last_on_error() {
+        const MAX_MS: u64 = 9_999_999_999_999_999;
+        let mut clock = super::Clock::new(FakeTimeSource::new(MAX_MS), 7);
+        let last = clock.tick().expect("sixteen-digit timestamp is valid");
+
+        assert_eq!((last.ms, last.counter), (MAX_MS, 0));
+        assert_eq!(last.to_string(), "9999999999999999-0000-00000007");
+        assert_eq!(last.to_string().parse::<Hlc>().unwrap(), last);
+        assert_eq!(clock.last, Some(last));
+
+        for now in [MAX_MS + 1, u64::MAX] {
+            clock.time_source.ms.set(now);
+            assert!(clock.tick().is_err(), "timestamp {now} exceeds 16 digits");
+            assert_eq!(clock.last, Some(last), "invalid time must preserve last");
+        }
+    }
+
+    #[test]
+    fn invalid_initial_time_leaves_last_unset() {
+        for now in [10_000_000_000_000_000, u64::MAX] {
+            let mut clock = super::Clock::new(FakeTimeSource::new(now), 7);
+
+            assert!(clock.tick().is_err(), "timestamp {now} exceeds 16 digits");
+            assert_eq!(clock.last, None);
+
+            clock.time_source.ms.set(1000);
+            let hlc = clock.tick().expect("valid time after rejected first tick");
+            assert_eq!((hlc.ms, hlc.counter), (1000, 0));
+            assert_eq!(clock.last, Some(hlc));
+        }
     }
 }
