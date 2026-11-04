@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize, Serializer};
+use std::cmp;
 use std::fmt::{self, Formatter};
 use std::str::FromStr;
 
@@ -138,6 +139,57 @@ impl<T: TimeSource> Clock<T> {
                     .ok_or(CoreError::HlcCounterOverflow)?,
                 device: self.device,
             },
+        };
+
+        self.last = Some(next);
+        Ok(next)
+    }
+
+    pub fn observe(&mut self, remote: Hlc) -> Result<Hlc, CoreError> {
+        let now_ms = self.time_source.now_ms();
+
+        if now_ms >= 10_u64.pow(16) {
+            return Err(CoreError::HlcTimestampOutOfRange { ms: now_ms });
+        }
+
+        let next = match self.last {
+            None => Hlc {
+                ms: cmp::max(now_ms, remote.ms),
+                counter: if now_ms > remote.ms {
+                    0
+                } else {
+                    remote
+                        .counter
+                        .checked_add(1)
+                        .ok_or(CoreError::HlcCounterOverflow)?
+                },
+                device: self.device,
+            },
+            Some(last) => {
+                let max_ms = cmp::max(cmp::max(now_ms, last.ms), remote.ms);
+                let counter = if max_ms == last.ms && max_ms == remote.ms {
+                    cmp::max(last.counter, remote.counter)
+                        .checked_add(1)
+                        .ok_or(CoreError::HlcCounterOverflow)?
+                } else if max_ms == last.ms {
+                    last.counter
+                        .checked_add(1)
+                        .ok_or(CoreError::HlcCounterOverflow)?
+                } else if max_ms == remote.ms {
+                    remote
+                        .counter
+                        .checked_add(1)
+                        .ok_or(CoreError::HlcCounterOverflow)?
+                } else {
+                    0
+                };
+
+                Hlc {
+                    ms: max_ms,
+                    counter,
+                    device: self.device,
+                }
+            }
         };
 
         self.last = Some(next);
@@ -311,5 +363,169 @@ mod tests {
             assert_eq!((hlc.ms, hlc.counter), (1000, 0));
             assert_eq!(clock.last, Some(hlc));
         }
+    }
+
+    #[test]
+    fn observe_handles_first_timestamp_and_merge_cases() {
+        const LOCAL_DEVICE: u32 = 7;
+        const REMOTE_DEVICE: u32 = 42;
+
+        for (now, previous, remote_ms, remote_counter, expected_ms, expected_counter) in [
+            (1001, None, 1000, 0, 1001, 0),
+            (1001, None, 1000, 5, 1001, 0),
+            (1000, None, 1000, 3, 1000, 4),
+            (999, None, 1000, 3, 1000, 4),
+            (1002, Some((1000, 3)), 1001, 5, 1002, 0),
+            (999, Some((1001, 3)), 1000, 5, 1001, 4),
+            (999, Some((1000, 3)), 1001, 5, 1001, 6),
+            (999, Some((1000, 3)), 1000, 5, 1000, 6),
+            (1000, Some((1000, 5)), 1000, 3, 1000, 6),
+            (1000, Some((1000, 3)), 999, 5, 1000, 4),
+            (1000, Some((999, 3)), 1000, 5, 1000, 6),
+        ] {
+            let mut clock = super::Clock::new(FakeTimeSource::new(now), LOCAL_DEVICE);
+            let previous = previous.map(|(ms, counter)| Hlc {
+                ms,
+                counter,
+                device: LOCAL_DEVICE,
+            });
+            clock.last = previous;
+            let remote = Hlc {
+                ms: remote_ms,
+                counter: remote_counter,
+                device: REMOTE_DEVICE,
+            };
+
+            let observed = clock.observe(remote).expect("observe should succeed");
+
+            assert_eq!(
+                (observed.ms, observed.counter),
+                (expected_ms, expected_counter)
+            );
+            assert!(observed > remote, "result must exceed the remote timestamp");
+            if let Some(previous) = previous {
+                assert!(
+                    observed > previous,
+                    "result must exceed the local timestamp"
+                );
+            }
+            assert_eq!(observed.device, LOCAL_DEVICE);
+            assert_eq!(
+                clock.last,
+                Some(observed),
+                "successful observe must save last"
+            );
+        }
+    }
+
+    #[test]
+    fn observe_counter_overflow_preserves_last() {
+        for now in [999, 1000] {
+            let mut clock = super::Clock::new(FakeTimeSource::new(now), 7);
+            let remote = Hlc {
+                ms: 1000,
+                counter: u16::MAX,
+                device: 42,
+            };
+
+            assert!(matches!(
+                clock.observe(remote),
+                Err(crate::error::CoreError::HlcCounterOverflow)
+            ));
+            assert_eq!(clock.last, None, "overflow must leave last unset");
+        }
+
+        for (last_ms, last_counter, remote_ms, remote_counter) in [
+            (1001, u16::MAX, 1000, 0),
+            (1000, 0, 1001, u16::MAX),
+            (1000, u16::MAX, 1000, 0),
+            (1000, 0, 1000, u16::MAX),
+            (1000, u16::MAX, 1000, u16::MAX),
+        ] {
+            let mut clock = super::Clock::new(FakeTimeSource::new(999), 7);
+            let last = Hlc {
+                ms: last_ms,
+                counter: last_counter,
+                device: 7,
+            };
+            clock.last = Some(last);
+            let remote = Hlc {
+                ms: remote_ms,
+                counter: remote_counter,
+                device: 42,
+            };
+
+            assert!(matches!(
+                clock.observe(remote),
+                Err(crate::error::CoreError::HlcCounterOverflow)
+            ));
+            assert_eq!(clock.last, Some(last), "overflow must preserve last");
+
+            clock.time_source.ms.set(1002);
+            let recovered = clock
+                .observe(remote)
+                .expect("forward time resets the counter");
+            assert_eq!((recovered.ms, recovered.counter), (1002, 0));
+            assert!(recovered > remote);
+            assert!(recovered > last);
+            assert_eq!(recovered.device, 7);
+            assert_eq!(clock.last, Some(recovered));
+        }
+    }
+
+    #[test]
+    fn hlc_order_matches_lexicographic_string_order() {
+        let timestamps = [
+            Hlc {
+                ms: 10,
+                counter: 0x10,
+                device: 0x10,
+            },
+            Hlc {
+                ms: 9,
+                counter: 0x10,
+                device: 0x0f,
+            },
+            Hlc {
+                ms: 10,
+                counter: 0x0f,
+                device: 0x10,
+            },
+            Hlc {
+                ms: 9,
+                counter: 0x0f,
+                device: 0x10,
+            },
+            Hlc {
+                ms: 10,
+                counter: 0x10,
+                device: 0x0f,
+            },
+            Hlc {
+                ms: 9,
+                counter: 0x0f,
+                device: 0x0f,
+            },
+            Hlc {
+                ms: 10,
+                counter: 0x0f,
+                device: 0x0f,
+            },
+            Hlc {
+                ms: 9,
+                counter: 0x10,
+                device: 0x10,
+            },
+        ];
+
+        let mut sorted_hlcs = timestamps.to_vec();
+        sorted_hlcs.sort();
+        let strings_from_sorted_hlcs: Vec<String> =
+            sorted_hlcs.iter().map(ToString::to_string).collect();
+
+        let mut sorted_strings: Vec<String> = timestamps.iter().map(ToString::to_string).collect();
+        sorted_strings.sort();
+
+        assert_eq!(strings_from_sorted_hlcs, sorted_strings);
     }
 }
