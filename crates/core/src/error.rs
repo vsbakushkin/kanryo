@@ -14,4 +14,7 @@ pub enum CoreError {
         got {value}"
     )]
     InvalidProjectStatus { value: String },
+
+    #[error("invalid HLC format, expected 'ms-counter-device', got {value}")]
+    InvalidHlcFormat { value: String },
 }
