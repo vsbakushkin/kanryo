@@ -12,5 +12,8 @@ serde = { workspace = true, features = ["derive"] }
 thiserror = "2.0.21"
 uuid = { version = "1.29.0", features = ["v7", "v5", "serde"] }
 
+[dev-dependencies]
+serde_json = { workspace = true }
+
 [target.wasm32-unknown-unknown.dependencies]
 uuid = { version = "1.29.0", features = ["js"] }

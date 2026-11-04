@@ -159,6 +159,7 @@ pub struct Task {
     column_id: Option<ColumnId>,
     milestone_id: Option<MilestoneId>,
     parent_id: Option<TaskId>,
+    #[serde(deserialize_with = "deserialize_task_title")]
     title: String,
     notes: String,
     priority: Priority,
@@ -206,6 +207,17 @@ impl Task {
         self.priority = priority_enum;
         Ok(())
     }
+}
+
+fn deserialize_task_title<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let title = String::deserialize(deserializer)?;
+
+    validation::validate_task_title(&title).map_err(serde::de::Error::custom)?;
+
+    Ok(title)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -324,6 +336,30 @@ mod tests {
             Err(CoreError::InvalidPriority { value: 5 })
         ));
         assert_eq!(task, saved);
+    }
+
+    #[test]
+    fn task_deserialization_validates_title() {
+        let task = test_task();
+
+        // Корректная задача должна восстановиться без изменений.
+        let json = serde_json::to_value(&task).unwrap();
+        let restored: Task = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(restored, task);
+
+        // Меняем только заголовок в JSON и проверяем границы.
+        for (length, should_accept) in [(0, false), (1, true), (500, true), (501, false)] {
+            let mut input = json.clone();
+            input["title"] = serde_json::Value::String("я".repeat(length));
+
+            let result = serde_json::from_value::<Task>(input);
+
+            assert_eq!(
+                result.is_ok(),
+                should_accept,
+                "unexpected result for a title with {length} characters"
+            );
+        }
     }
 
     #[test]
