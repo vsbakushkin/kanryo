@@ -12,6 +12,7 @@ use crate::{
 };
 
 pub type FieldValue = Value;
+pub type Clocks<F> = BTreeMap<F, Hlc>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -1,6 +1,10 @@
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::change::{
+    ChecklistItemField, Clocks, ColumnField, JournalEntryField, LabelField, MilestoneField,
+    ProjectField, TaskField, TaskLabelField,
+};
 use crate::error::CoreError;
 use crate::ids::{
     ChecklistItemId, ColumnId, JournalEntryId, LabelId, MilestoneId, ProjectId, TaskId,
@@ -81,6 +85,7 @@ pub struct Project {
     is_inbox: bool,
     deleted: bool,
     created_at: DateTime<Utc>,
+    clocks: Clocks<ProjectField>,
 }
 
 impl Project {
@@ -105,6 +110,7 @@ impl Project {
             is_inbox: false,
             deleted: false,
             created_at,
+            clocks: Clocks::new(),
         })
     }
 
@@ -127,6 +133,7 @@ pub struct Milestone {
     position: String,
     deleted: bool,
     created_at: DateTime<Utc>,
+    clocks: Clocks<MilestoneField>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -138,6 +145,7 @@ pub struct JournalEntry {
     kind: String,
     deleted: bool,
     created_at: DateTime<Utc>,
+    clocks: Clocks<JournalEntryField>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -149,6 +157,7 @@ pub struct Column {
     is_done: bool,
     deleted: bool,
     created_at: DateTime<Utc>,
+    clocks: Clocks<ColumnField>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -167,6 +176,7 @@ pub struct Task {
     position: String,
     deleted: bool,
     created_at: DateTime<Utc>,
+    clocks: Clocks<TaskField>,
 }
 
 impl Task {
@@ -193,6 +203,7 @@ impl Task {
             position,
             deleted: false,
             created_at,
+            clocks: Clocks::new(),
         })
     }
 
@@ -229,6 +240,7 @@ pub struct ChecklistItem {
     position: String,
     deleted: bool,
     created_at: DateTime<Utc>,
+    clocks: Clocks<ChecklistItemField>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -238,6 +250,7 @@ pub struct Label {
     color: String,
     deleted: bool,
     created_at: DateTime<Utc>,
+    clocks: Clocks<LabelField>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -245,6 +258,7 @@ pub struct TaskLabel {
     task_id: TaskId,
     label_id: LabelId,
     deleted: bool,
+    clocks: Clocks<TaskLabelField>,
 }
 
 #[cfg(test)]
@@ -434,5 +448,33 @@ mod tests {
                 Err(CoreError::InvalidProjectStatus { value: invalid }) if invalid == value
             ));
         }
+    }
+
+    #[test]
+    fn task_clocks_preserve_timestamps_and_validate_field_names() {
+        let mut task = test_task();
+        assert!(task.clocks.is_empty());
+
+        let title_hlc = "0001761650000000-0000-a1b2c3d4".parse().unwrap();
+        let priority_hlc = "0001761650000000-0001-a1b2c3d4".parse().unwrap();
+
+        task.clocks.insert(TaskField::Title, title_hlc);
+        task.clocks.insert(TaskField::Priority, priority_hlc);
+
+        let json = serde_json::to_value(&task).unwrap();
+        assert_eq!(
+            json["clocks"],
+            serde_json::json!({
+                "title": "0001761650000000-0000-a1b2c3d4",
+                "priority": "0001761650000000-0001-a1b2c3d4"
+            })
+        );
+
+        let restored: Task = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(restored, task);
+
+        let mut invalid = json;
+        invalid["clocks"]["name"] = serde_json::json!("0001761650000000-0000-a1b2c3d4");
+        assert!(serde_json::from_value::<Task>(invalid).is_err());
     }
 }
