@@ -1,3 +1,4 @@
+pub mod change;
 pub mod error;
 pub mod hlc;
 pub mod ids;
