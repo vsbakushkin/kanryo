@@ -116,6 +116,12 @@ impl LabelId {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TaskLabelKey {
+    pub task_id: TaskId,
+    pub label_id: LabelId,
+}
+
 fn uuid_v7_from_parts(unix_ms: u64, random_bytes: [u8; 10]) -> Uuid {
     uuid::Builder::from_unix_timestamp_millis(unix_ms, &random_bytes).into_uuid()
 }
