@@ -23,4 +23,10 @@ pub enum CoreError {
 
     #[error("HLC timestamp exceeds 16 decimal digits: {ms}")]
     HlcTimestampOutOfRange { ms: u64 },
+
+    #[error("cannot merge changes for different record IDs")]
+    MergeIdMismatch,
+
+    #[error("cannot merge changes for different entity kinds")]
+    MergeEntityMismatch,
 }

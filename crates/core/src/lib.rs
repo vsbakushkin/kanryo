@@ -2,5 +2,6 @@ pub mod change;
 pub mod error;
 pub mod hlc;
 pub mod ids;
+pub mod merge;
 pub mod model;
 pub mod validation;
