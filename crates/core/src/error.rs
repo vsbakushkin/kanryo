@@ -29,4 +29,10 @@ pub enum CoreError {
 
     #[error("cannot merge changes for different entity kinds")]
     MergeEntityMismatch,
+
+    #[error("invalid position: {value}")]
+    InvalidPosition { value: String },
+
+    #[error("position bounds must be distinct and ordered, got {lower} and {upper}")]
+    InvalidPositionBounds { lower: String, upper: String },
 }

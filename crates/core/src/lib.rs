@@ -4,4 +4,5 @@ pub mod hlc;
 pub mod ids;
 pub mod merge;
 pub mod model;
+pub mod position;
 pub mod validation;
