@@ -83,4 +83,24 @@ mod tests {
             Err(CoreError::InvalidPosition { .. })
         ));
     }
+
+    #[test]
+    fn repeated_insertions_preserve_strict_order() {
+        let a = first();
+        let b = after(&a).expect("after should accept a valid position");
+        let mut positions: Vec<String> = vec![a.clone(), b.clone()];
+
+        for _ in 0..1000 {
+            let inserted = between(&positions[0], &positions[1])
+                .expect("between should accept ordered valid bounds");
+            assert!(positions[0] < inserted);
+            assert!(inserted < positions[1]);
+            positions.insert(1, inserted);
+        }
+
+        assert_eq!(positions.len(), 1002);
+        assert_eq!(positions.first(), Some(&a));
+        assert_eq!(positions.last(), Some(&b));
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+    }
 }
