@@ -8,6 +8,7 @@ chrono = { version = "0.4.45", default-features = false, features = [
     "std",
     "serde",
 ] }
+fractional_index = "2.0.2"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = "2.0.21"
