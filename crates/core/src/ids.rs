@@ -1,5 +1,13 @@
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+use uuid::{Uuid, uuid};
+
+/// The shared Inbox project ID used by every device.
+/// Changing it after data has been created requires a migration.
+pub const INBOX_ID: ProjectId = ProjectId(uuid!("01a1d56b-3cab-71f9-828c-e74c9e652a46"));
+
+// Stable namespace for label IDs derived from normalized names.
+// Changing it would assign new IDs to existing labels.
+const LABEL_NAMESPACE: Uuid = uuid!("2a129103-0af8-4bfe-8575-602dc601a0c2");
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectId(Uuid);
@@ -116,6 +124,12 @@ impl LabelId {
     }
 }
 
+pub fn label_id(name: &str) -> LabelId {
+    let normalized_name = name.trim().to_lowercase();
+    let uuid = Uuid::new_v5(&LABEL_NAMESPACE, normalized_name.as_bytes());
+    LabelId::from_uuid(uuid)
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskLabelKey {
     pub task_id: TaskId,
@@ -163,5 +177,21 @@ mod tests {
         for uuid in generated {
             assert_eq!(uuid, expected);
         }
+    }
+
+    #[test]
+    fn label_and_inbox_identities_remain_stable() {
+        for name in ["Bug", " bug ", "BUG"] {
+            assert_eq!(
+                label_id(name).as_uuid(),
+                uuid!("38e67d22-6391-5238-843a-ad1e49d71eed")
+            );
+        }
+
+        assert_ne!(label_id("bug"), label_id("feature"));
+        assert_eq!(
+            INBOX_ID.as_uuid(),
+            uuid!("01a1d56b-3cab-71f9-828c-e74c9e652a46")
+        );
     }
 }
